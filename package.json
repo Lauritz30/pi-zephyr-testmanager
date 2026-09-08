@@ -1,6 +1,6 @@
 {
   "name": "pi-zephyr-testmanager",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Zephyr Scale Cloud API integration for the pi coding agent — test cases, test cycles, and test executions.",
   "keywords": [
     "pi-package",

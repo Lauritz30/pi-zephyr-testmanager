@@ -3,6 +3,9 @@
  */
 
 import { Type } from "typebox";
+import { loadConfig, resolveSite, type ZephyrConfig } from "../config.ts";
+import { createZephyrClient } from "../client.ts";
+import { createZephyrService, type ZephyrService } from "../service.ts";
 
 /** Result returned by every tool execute(). */
 export interface ToolResult {
@@ -27,3 +30,21 @@ export const paginationParams = {
   maxResults: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
   startAt: Type.Optional(Type.Integer({ minimum: 0 })),
 };
+
+export interface ToolRuntime {
+  loadConfig(): ZephyrConfig;
+  resolveSite(config: ZephyrConfig, name?: string): ReturnType<typeof resolveSite>;
+  getSiteService(params: { site?: string }): { config: ZephyrConfig; site: ReturnType<typeof resolveSite>; service: ZephyrService };
+}
+
+export function createToolRuntime(): ToolRuntime {
+  return {
+    loadConfig,
+    resolveSite,
+    getSiteService(params) {
+      const config = loadConfig();
+      const site = resolveSite(config, params.site);
+      return { config, site, service: createZephyrService(createZephyrClient(site)) };
+    },
+  };
+}

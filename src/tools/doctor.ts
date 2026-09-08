@@ -1,8 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { loadConfig, resolveSite } from "../config.ts";
-import { createZephyrClient } from "../client.ts";
-import { errorResult, textResult, type ToolResult } from "./shared.ts";
+import { errorResult, textResult, createToolRuntime, type ToolResult, type ToolRuntime } from "./shared.ts";
 
 const parameters = Type.Object({
   site: Type.Optional(Type.String({ description: "Site name to check; defaults to defaultSite." })),
@@ -10,8 +8,8 @@ const parameters = Type.Object({
 type Params = Static<typeof parameters>;
 
 /** Shared by the zephyr_doctor tool and the /zephyr-doctor command. */
-export async function runDoctor(params: Params): Promise<ToolResult> {
-  const config = loadConfig();
+export async function runDoctor(params: Params, runtime: ToolRuntime = createToolRuntime()): Promise<ToolResult> {
+  const config = runtime.loadConfig();
 
   if (!config.configExists) {
     return textResult(
@@ -22,7 +20,7 @@ export async function runDoctor(params: Params): Promise<ToolResult> {
 
   let site;
   try {
-    site = resolveSite(config, params.site);
+    site = runtime.resolveSite(config, params.site);
   } catch (error) {
     return errorResult((error as Error).message);
   }
@@ -34,16 +32,16 @@ export async function runDoctor(params: Params): Promise<ToolResult> {
     );
   }
 
-  const client = createZephyrClient(site);
+  const { service } = runtime.getSiteService(params);
   // No dedicated "whoami" endpoint; a minimal test case listing call verifies auth + connectivity.
-  const result = await client.get("/testcases", { query: { maxResults: 1 } });
+  const result = await service.listTestCases({ maxResults: 1 });
   return textResult(
     `Connected to ${site.baseUrl}. Test case listing returned ${result.total ?? "an unknown number of"} result(s).`,
     { configured: true, mock: false, site: site.name },
   );
 }
 
-export function createDoctorTool(): ToolDefinition<any, any, any> {
+export function createDoctorTool(runtime: ToolRuntime = createToolRuntime()): ToolDefinition<any, any, any> {
   return {
     name: "zephyr_doctor",
     label: "Zephyr Doctor",
@@ -51,7 +49,7 @@ export function createDoctorTool(): ToolDefinition<any, any, any> {
     promptSnippet: "Verify Zephyr Scale configuration and connection health",
     parameters,
     async execute(_toolCallId: string, params: Params) {
-      return runDoctor(params);
+      return runDoctor(params, runtime);
     },
   };
 }

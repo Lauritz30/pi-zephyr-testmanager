@@ -1,14 +1,6 @@
 import { Type, type Static } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { loadConfig, resolveSite } from "../config.ts";
-import { createZephyrClient } from "../client.ts";
-import { siteParam, paginationParams, textResult } from "./shared.ts";
-
-function getSiteClient(params: { site?: string }) {
-  const config = loadConfig();
-  const site = resolveSite(config, params.site);
-  return { config, site, client: createZephyrClient(site) };
-}
+import { siteParam, paginationParams, textResult, createToolRuntime, type ToolRuntime } from "./shared.ts";
 
 /** Format one page of Zephyr paged results (values/total/isLast) into a readable summary. */
 function summarizePage(result: { values?: unknown[]; total?: number; isLast?: boolean }, formatItem: (item: any) => string): string {
@@ -20,6 +12,9 @@ function summarizePage(result: { values?: unknown[]; total?: number; isLast?: bo
 const listCasesParameters = Type.Object({
   projectKey: Type.String(),
   ...paginationParams,
+  allPages: Type.Optional(Type.Boolean()),
+  maxPages: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+  maxItems: Type.Optional(Type.Integer({ minimum: 1, maximum: 10000 })),
   site: siteParam,
 });
 type ListCasesParams = Static<typeof listCasesParameters>;
@@ -33,6 +28,9 @@ type GetCaseParams = Static<typeof getCaseParameters>;
 const listCyclesParameters = Type.Object({
   projectKey: Type.String(),
   ...paginationParams,
+  allPages: Type.Optional(Type.Boolean()),
+  maxPages: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+  maxItems: Type.Optional(Type.Integer({ minimum: 1, maximum: 10000 })),
   site: siteParam,
 });
 type ListCyclesParams = Static<typeof listCyclesParameters>;
@@ -47,6 +45,9 @@ const listExecutionsParameters = Type.Object({
   projectKey: Type.String(),
   testCycle: Type.Optional(Type.String({ description: "Test cycle id or key to filter by." })),
   ...paginationParams,
+  allPages: Type.Optional(Type.Boolean()),
+  maxPages: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+  maxItems: Type.Optional(Type.Integer({ minimum: 1, maximum: 10000 })),
   site: siteParam,
 });
 type ListExecutionsParams = Static<typeof listExecutionsParameters>;
@@ -57,7 +58,7 @@ const getExecutionParameters = Type.Object({
 });
 type GetExecutionParams = Static<typeof getExecutionParameters>;
 
-export function createReadTools(): ToolDefinition<any, any, any>[] {
+export function createReadTools(runtime: ToolRuntime = createToolRuntime()): ToolDefinition<any, any, any>[] {
   return [
     {
       name: "zephyr_list_test_cases",
@@ -66,9 +67,13 @@ export function createReadTools(): ToolDefinition<any, any, any>[] {
       promptSnippet: "List Zephyr Scale test cases for a project",
       parameters: listCasesParameters,
       async execute(_toolCallId: string, params: ListCasesParams) {
-        const { client } = getSiteClient(params);
-        const result = await client.get("/testcases", {
-          query: { projectKey: params.projectKey, maxResults: params.maxResults, startAt: params.startAt },
+        const { service } = runtime.getSiteService(params);
+        const result = await (params.allPages ? service.listAllTestCases : service.listTestCases)({
+          projectKey: params.projectKey,
+          maxResults: params.maxResults,
+          startAt: params.startAt,
+          maxPages: params.maxPages,
+          maxItems: params.maxItems,
         });
         return textResult(summarizePage(result, (tc: any) => `${tc.key}: ${tc.name}`), result);
       },
@@ -80,8 +85,8 @@ export function createReadTools(): ToolDefinition<any, any, any>[] {
       promptSnippet: "Fetch a single Zephyr Scale test case by key",
       parameters: getCaseParameters,
       async execute(_toolCallId: string, params: GetCaseParams) {
-        const { client } = getSiteClient(params);
-        const testCase = await client.get(`/testcases/${encodeURIComponent(params.testCaseKey)}`);
+        const { service } = runtime.getSiteService(params);
+        const testCase = await service.getTestCase(params.testCaseKey);
         return textResult(`${testCase.key}: ${testCase.name}`, testCase);
       },
     },
@@ -92,9 +97,13 @@ export function createReadTools(): ToolDefinition<any, any, any>[] {
       promptSnippet: "List Zephyr Scale test cycles for a project",
       parameters: listCyclesParameters,
       async execute(_toolCallId: string, params: ListCyclesParams) {
-        const { client } = getSiteClient(params);
-        const result = await client.get("/testcycles", {
-          query: { projectKey: params.projectKey, maxResults: params.maxResults, startAt: params.startAt },
+        const { service } = runtime.getSiteService(params);
+        const result = await (params.allPages ? service.listAllTestCycles : service.listTestCycles)({
+          projectKey: params.projectKey,
+          maxResults: params.maxResults,
+          startAt: params.startAt,
+          maxPages: params.maxPages,
+          maxItems: params.maxItems,
         });
         return textResult(summarizePage(result, (tc: any) => `${tc.key}: ${tc.name}`), result);
       },
@@ -106,8 +115,8 @@ export function createReadTools(): ToolDefinition<any, any, any>[] {
       promptSnippet: "Fetch a single Zephyr Scale test cycle",
       parameters: getCycleParameters,
       async execute(_toolCallId: string, params: GetCycleParams) {
-        const { client } = getSiteClient(params);
-        const cycle = await client.get(`/testcycles/${encodeURIComponent(params.testCycleIdOrKey)}`);
+        const { service } = runtime.getSiteService(params);
+        const cycle = await service.getTestCycle(params.testCycleIdOrKey);
         return textResult(`${cycle.key}: ${cycle.name}`, cycle);
       },
     },
@@ -118,14 +127,14 @@ export function createReadTools(): ToolDefinition<any, any, any>[] {
       promptSnippet: "List Zephyr Scale test executions for a project or cycle",
       parameters: listExecutionsParameters,
       async execute(_toolCallId: string, params: ListExecutionsParams) {
-        const { client } = getSiteClient(params);
-        const result = await client.get("/testexecutions", {
-          query: {
-            projectKey: params.projectKey,
-            testCycle: params.testCycle,
-            maxResults: params.maxResults,
-            startAt: params.startAt,
-          },
+        const { service } = runtime.getSiteService(params);
+        const result = await (params.allPages ? service.listAllTestExecutions : service.listTestExecutions)({
+          projectKey: params.projectKey,
+          testCycle: params.testCycle,
+          maxResults: params.maxResults,
+          startAt: params.startAt,
+          maxPages: params.maxPages,
+          maxItems: params.maxItems,
         });
         return textResult(
           summarizePage(result, (te: any) => `${te.key ?? te.id}: ${te.testCaseKey} — ${te.testExecutionStatus?.name ?? "unknown status"}`),
@@ -140,8 +149,8 @@ export function createReadTools(): ToolDefinition<any, any, any>[] {
       promptSnippet: "Fetch a single Zephyr Scale test execution",
       parameters: getExecutionParameters,
       async execute(_toolCallId: string, params: GetExecutionParams) {
-        const { client } = getSiteClient(params);
-        const execution = await client.get(`/testexecutions/${encodeURIComponent(params.testExecutionIdOrKey)}`);
+        const { service } = runtime.getSiteService(params);
+        const execution = await service.getTestExecution(params.testExecutionIdOrKey);
         return textResult(
           `${execution.key ?? execution.id}: ${execution.testExecutionStatus?.name ?? "unknown status"}`,
           execution,

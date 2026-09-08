@@ -1,15 +1,7 @@
 import { Type, type Static } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { loadConfig, resolveSite } from "../config.ts";
-import { createZephyrClient } from "../client.ts";
 import { guardMutation, type MutationContext } from "../safety.ts";
-import { siteParam, textResult } from "./shared.ts";
-
-function getSiteClient(params: { site?: string }) {
-  const config = loadConfig();
-  const site = resolveSite(config, params.site);
-  return { config, site, client: createZephyrClient(site) };
-}
+import { siteParam, textResult, createToolRuntime, type ToolRuntime } from "./shared.ts";
 
 const createCaseParameters = Type.Object({
   projectKey: Type.String(),
@@ -20,6 +12,7 @@ const createCaseParameters = Type.Object({
   fields: Type.Optional(
     Type.Record(Type.String(), Type.Unknown(), { description: "Additional raw Zephyr Scale fields, merged in as-is." }),
   ),
+  dryRun: Type.Optional(Type.Boolean({ description: "Preview the normalized request without prompting or sending it." })),
   site: siteParam,
 });
 type CreateCaseParams = Static<typeof createCaseParameters>;
@@ -35,6 +28,7 @@ const addToCycleParameters = Type.Object({
     Type.String({ description: "Initial status name, e.g. Not Executed. Defaults to the project's default status when omitted." }),
   ),
   environmentName: Type.Optional(Type.String()),
+  dryRun: Type.Optional(Type.Boolean({ description: "Preview the normalized requests without prompting or sending them." })),
   site: siteParam,
 });
 type AddToCycleParams = Static<typeof addToCycleParameters>;
@@ -43,11 +37,12 @@ const updateExecutionParameters = Type.Object({
   testExecutionIdOrKey: Type.String(),
   statusName: Type.String({ description: "Status name as configured in the project, e.g. Pass, Fail, Blocked." }),
   comment: Type.Optional(Type.String()),
+  dryRun: Type.Optional(Type.Boolean({ description: "Preview the normalized request without prompting or sending it." })),
   site: siteParam,
 });
 type UpdateExecutionParams = Static<typeof updateExecutionParameters>;
 
-export function createWriteTools(): ToolDefinition<any, any, any>[] {
+export function createWriteTools(runtime: ToolRuntime = createToolRuntime()): ToolDefinition<any, any, any>[] {
   return [
     {
       name: "zephyr_create_test_case",
@@ -62,20 +57,21 @@ export function createWriteTools(): ToolDefinition<any, any, any>[] {
         _onUpdate: unknown,
         ctx: MutationContext | undefined,
       ) {
-        const { config, site, client } = getSiteClient(params);
-        await guardMutation(config, site, ctx, {
+        const { config, site, service } = runtime.getSiteService(params);
+        if (!params.dryRun) await guardMutation(config, site, ctx, {
           title: "Create Zephyr Scale test case",
           message: `Create test case "${params.name}" in ${params.projectKey}?`,
         });
 
-        const created = await client.post("/testcases", {
+        const created = await service.createTestCase({
           projectKey: params.projectKey,
           name: params.name,
-          ...(params.objective ? { objective: params.objective } : {}),
-          ...(params.precondition ? { precondition: params.precondition } : {}),
-          ...(params.folderId ? { folderId: params.folderId } : {}),
-          ...params.fields,
-        });
+          objective: params.objective,
+          precondition: params.precondition,
+          folderId: params.folderId,
+          fields: params.fields,
+        }, { dryRun: params.dryRun });
+        if ("dryRun" in created) return textResult(`Dry-run: would create test case "${params.name}" in ${params.projectKey}.`, created);
         return textResult(`Created test case ${created.key ?? created.id}.`, created);
       },
     },
@@ -96,28 +92,24 @@ export function createWriteTools(): ToolDefinition<any, any, any>[] {
         _onUpdate: unknown,
         ctx: MutationContext | undefined,
       ) {
-        const { config, site, client } = getSiteClient(params);
-        await guardMutation(config, site, ctx, {
+        const { config, site, service } = runtime.getSiteService(params);
+        if (!params.dryRun) await guardMutation(config, site, ctx, {
           title: "Add test cases to Zephyr Scale cycle",
           message: `Add ${params.testCaseKeys.length} test case(s) to cycle ${params.testCycleKey} in ${params.projectKey}?`,
         });
 
-        const created: Array<{ testCaseKey: string; executionKey: string }> = [];
-        for (const testCaseKey of params.testCaseKeys) {
-          const execution = await client.post("/testexecutions", {
-            projectKey: params.projectKey,
-            testCaseKey,
-            testCycleKey: params.testCycleKey,
-            ...(params.statusName ? { statusName: params.statusName } : {}),
-            ...(params.environmentName ? { environmentName: params.environmentName } : {}),
-          });
-          created.push({ testCaseKey, executionKey: execution.key ?? execution.id });
-        }
-
-        const summary = created.map((c) => `${c.testCaseKey} -> execution ${c.executionKey}`).join("\n");
-        return textResult(`Added ${created.length} test case(s) to cycle ${params.testCycleKey}.\n${summary}`, {
+        const created = await service.addTestCasesToCycle({
+          projectKey: params.projectKey,
           testCycleKey: params.testCycleKey,
-          created,
+          testCaseKeys: params.testCaseKeys,
+          statusName: params.statusName,
+          environmentName: params.environmentName,
+        }, { dryRun: params.dryRun });
+        if (Array.isArray(created)) return textResult(`Dry-run: would add ${params.testCaseKeys.length} test case(s) to cycle ${params.testCycleKey}.`, created);
+        const summary = created.created.map((c) => `${c.testCaseKey} -> execution ${c.executionKey}`).join("\n");
+        return textResult(`Added ${created.created.length} test case(s) to cycle ${params.testCycleKey}.\n${summary}`, {
+          testCycleKey: params.testCycleKey,
+          created: created.created,
         });
       },
     },
@@ -135,19 +127,20 @@ export function createWriteTools(): ToolDefinition<any, any, any>[] {
         _onUpdate: unknown,
         ctx: MutationContext | undefined,
       ) {
-        const { config, site, client } = getSiteClient(params);
-        await guardMutation(config, site, ctx, {
+        const { config, site, service } = runtime.getSiteService(params);
+        if (!params.dryRun) await guardMutation(config, site, ctx, {
           title: "Update Zephyr Scale test execution status",
           message: `Set ${params.testExecutionIdOrKey} status to "${params.statusName}"?`,
         });
 
-        await client.put(`/testexecutions/${encodeURIComponent(params.testExecutionIdOrKey)}`, {
-          statusName: params.statusName,
-          ...(params.comment ? { comment: params.comment } : {}),
-        });
-        return textResult(`Updated ${params.testExecutionIdOrKey} to "${params.statusName}".`, {
+        const updated = await service.updateTestExecution({
           testExecutionIdOrKey: params.testExecutionIdOrKey,
           statusName: params.statusName,
+          comment: params.comment,
+        }, { dryRun: params.dryRun });
+        if (params.dryRun) return textResult(`Dry-run: would update ${params.testExecutionIdOrKey} to "${params.statusName}".`, updated);
+        return textResult(`Updated ${params.testExecutionIdOrKey} to "${params.statusName}".`, {
+          ...updated,
         });
       },
     },
